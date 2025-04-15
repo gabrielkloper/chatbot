@@ -11,8 +11,8 @@ class Config {
     const DB_PASS = '';
 
     //Dados da instancia
-    const HOST = "{{host}}";
-    const INSTANCE = "{{instance key}}";
-    const TOKEN = "{{token}}";
+    const HOST = "apistart03.megaapi.com.br";
+    const INSTANCE = "megastart-MypcJrbAzEa";
+    const TOKEN = "MypcJrbAzEa";
 
 }
