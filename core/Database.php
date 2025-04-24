@@ -58,26 +58,35 @@ class Database
     }
 
     /**Função para fazer o select */
-    public function select($fields = "*", $where = null)
+    public function select($fields = "*", $where = null, $params = [])
     {
-
         $query = "SELECT " . $fields . " FROM " . $this->table . " " . $where;
-        return $this->execute($query);
+        return $this->execute($query, $params);
     }
 
 
     /***Função para fazer o update */
-    public function update($values, $where)
+    public function update($values, $where, $params = [])
     {
-
         $fields = array_keys($values);
+        $set = [];
+        foreach ($fields as $field) {
+            $set[] = "$field = :set_$field";
+        }
 
-        $query = "UPDATE " . $this->table . " SET " . implode('=?,', $fields) . "=? WHERE " . $where;
+        $query = "UPDATE " . $this->table . " SET " . implode(',', $set) . " WHERE " . $where;
+        
+        // Adiciona os parâmetros do SET
+        $executeParams = [];
+        foreach ($values as $field => $value) {
+            $executeParams[":set_$field"] = $value;
+        }
+        // Adiciona os parâmetros do WHERE
+        $executeParams = array_merge($executeParams, $params);
 
-        $return = $this->execute($query, array_values($values));
+        $return = $this->execute($query, $executeParams);
 
         if ($return === false) {
-
             return false;
         }
 
@@ -86,11 +95,10 @@ class Database
 
 
     /***função para deletar */
-    public function delete($where)
+    public function delete($where, $params = [])
     {
-
         $query = "DELETE FROM " . $this->table . " WHERE " . $where;
-        $this->execute($query);
+        $this->execute($query, $params);
         return true;
     }
 }

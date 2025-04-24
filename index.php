@@ -5,9 +5,14 @@ require __DIR__ . '/vendor/autoload.php';
 use core\Megaapi;
 use core\Model;
 
+// Megaapi::configWebhook("https://a086-2804-3d28-43-e0e7-b018-c156-364e-8370.ngrok-free.app/chatbotMegaapi/index.php", true);
+
 // Enable error reporting for debugging
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
+
+
+file_put_contents('webhook.log', print_r(json_decode(file_get_contents('php://input'), true), true) . "\n", FILE_APPEND);
 
 // Função para fazer log de erros com mais detalhes
 function logError($message, $data = null) {
@@ -175,19 +180,25 @@ function extractChatId($array) {
 
 // Função para gerenciar o estado da conversa
 function getConversationState($chatId) {
+    if (!isset($_SESSION)) {
+        session_start();
+    }
+    
     if (!isset($_SESSION['conversations'])) {
         $_SESSION['conversations'] = [];
     }
+    
     if (!isset($_SESSION['conversations'][$chatId])) {
         $_SESSION['conversations'][$chatId] = [
-            'menu' => 'main', // Indica em qual menu estamos: 'main', 'consulta', etc
+            'menu' => 'main',
             'fluxo' => null,
-            'subfluxo' => null, // Novo campo para controlar subfluxos
+            'subfluxo' => null,
             'dados' => [],
             'campo' => 0,
             'perguntas' => []
         ];
     }
+    
     return $_SESSION['conversations'][$chatId];
 }
 
@@ -201,6 +212,27 @@ session_start();
 
 // Função para normalizar o formato da mensagem
 function normalizeMessageFormat($array) {
+    // If message type is not set, return null
+    if (!isset($array['messageType'])) {
+        return null;
+    }
+
+    // For message.ack types, return a specific format
+    if ($array['messageType'] === 'message.ack') {
+        return [
+            'messageType' => 'message.ack',
+            'instance_key' => $array['instance_key'] ?? null,
+            'key' => [
+                'fromMe' => $array['key']['fromMe'] ?? false,
+                'remoteJid' => $array['key']['remoteJid'] ?? null,
+                'id' => $array['key']['id'] ?? null
+            ],
+            'update' => [
+                'status' => $array['update']['status'] ?? null
+            ]
+        ];
+    }
+
     $normalized = [
         'key' => [
             'fromMe' => false,
@@ -213,26 +245,242 @@ function normalizeMessageFormat($array) {
         ]
     ];
 
-    // Normaliza o campo key
+    // Normalize the key fields
     if (isset($array['key'])) {
         $normalized['key']['fromMe'] = !empty($array['key']['fromMe']);
         $normalized['key']['remoteJid'] = $array['key']['remoteJid'] ?? null;
         $normalized['key']['id'] = $array['key']['id'] ?? null;
     }
 
-    // Normaliza o tipo de mensagem
+    // Normalize message type
     $normalized['messageType'] = $array['messageType'] ?? null;
 
-    // Normaliza a mensagem
+    // Normalize the message content
     if (isset($array['message'])) {
         if (isset($array['message']['conversation'])) {
             $normalized['message']['conversation'] = $array['message']['conversation'];
         } elseif (isset($array['message']['extendedTextMessage']['text'])) {
             $normalized['message']['conversation'] = $array['message']['extendedTextMessage']['text'];
         }
+    } else if (isset($array['conversation'])) {
+        $normalized['message']['conversation'] = $array['conversation'];
     }
 
     return $normalized;
+}
+
+// Função para processar cada etapa do fluxo
+function processStep($chatId, $message, $currentState) {
+    $step = $currentState ? $currentState['current_step'] : 'initial';
+    $dados = $currentState ? $currentState['dados'] : [];
+    $response = '';
+    
+    // Verificar se é timeout
+    if ($step === 'timeout') {
+        Model::resetChatState($chatId);
+        return "Devido à inatividade, seu atendimento foi encerrado. Por favor, digite 'oi' para iniciar um novo atendimento.";
+    }
+    
+    switch ($step) {
+        case 'initial':
+            if (isGreeting($message)) {
+                Model::updateChatState($chatId, 'menu');
+                return "Seja bem-vindo à Nefroclinicas unidade xxx. Digite a opção desejada abaixo:\n\n" .
+                       "1 - Marcação de Consultas\n" .
+                       "2 - Solicitação de Vaga para Diálise\n" .
+                       "3 - Notificar uma Falta ou Ausência de Sessão de Diálise\n" .
+                       "4 - Caso queira deixar um elogio, sugestão ou reclamação";
+            }
+            return "Olá! Digite 'oi' para começar.";
+
+        case 'menu':
+            switch($message) {
+                case "1":
+                    Model::updateChatState($chatId, 'consulta_tipo');
+                    return "Digite:\n1 - Para primeira consulta\n2 - Caso não seja sua primeira consulta conosco";
+                case "2":
+                    Model::resetChatState($chatId);
+                    return "Para mais informações de vagas em nossa unidade, segue o contato da nossa chefe de Captação: Cynthia - 21 98987-6009\n\nA Nefroclinicas xxx agradece o contato.";
+                case "3":
+                    Model::updateChatState($chatId, 'falta_nome');
+                    return "Por favor, informe o nome completo do paciente:";
+                case "4":
+                    Model::updateChatState($chatId, 'feedback');
+                    return "Por favor, descreva para nós o seu elogio, sugestão ou reclamação:";
+                default:
+                    return "Opção inválida. Digite um número de 1 a 4.";
+            }
+
+        case 'consulta_tipo':
+            switch($message) {
+                case "1":
+                    Model::updateChatState($chatId, 'primeira_consulta_nome', ['tipo' => 'primeira_consulta']);
+                    return "Por favor, informe seu nome completo:";
+                case "2":
+                    Model::updateChatState($chatId, 'retorno_nome', ['tipo' => 'consulta_retorno']);
+                    return "Por favor, informe seu nome completo:";
+                default:
+                    return "Opção inválida. Digite 1 para primeira consulta ou 2 para retorno.";
+            }
+
+        // Fluxo primeira consulta
+        case 'primeira_consulta_nome':
+            $dados['nome_completo'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_identidade', $dados);
+            return "Por favor, informe seu número de identidade:";
+
+        case 'primeira_consulta_identidade':
+            $dados['identidade'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_cpf', $dados);
+            return "Por favor, informe seu CPF:";
+
+        case 'primeira_consulta_cpf':
+            $dados['cpf'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_endereco', $dados);
+            return "Por favor, informe seu endereço completo:";
+
+        case 'primeira_consulta_endereco':
+            $dados['endereco'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_convenio', $dados);
+            return "Por favor, informe seu convênio:";
+
+        case 'primeira_consulta_convenio':
+            $dados['convenio'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_carteira', $dados);
+            return "Por favor, informe o número da sua carteira do convênio:";
+
+        case 'primeira_consulta_carteira':
+            $dados['numero_carteira'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_medico', $dados);
+            return "Por favor, informe o médico de sua preferência (se houver):";
+
+        case 'primeira_consulta_medico':
+            $dados['medico_preferencia'] = $message;
+            Model::updateChatState($chatId, 'primeira_consulta_data', $dados);
+            return "Por favor, informe o dia e hora de sua preferência:";
+
+        case 'primeira_consulta_data':
+            $dados['dia_hora_interesse'] = $message;
+            $dados['tipo_atendimento'] = 'primeira_consulta';
+            $dados['numero_contato'] = extrairNumeroCelular($chatId);
+            
+            salvarAgendamento($dados);
+
+            // Enviar mensagem para outro número
+            $mensagemRedirecionada = "Primeiro Agendamento:\n";
+            $mensagemRedirecionada .= "Nome: " . $dados['nome_completo'] . "\n";
+            $mensagemRedirecionada .= "Identidade: " . $dados['identidade'] . "\n";
+            $mensagemRedirecionada .= "CPF: " . $dados['cpf'] . "\n";
+            $mensagemRedirecionada .= "Endereço: " . $dados['endereco'] . "\n";
+            $mensagemRedirecionada .= "Convênio: " . $dados['convenio'] . "\n";
+            $mensagemRedirecionada .= "Nº Carteira: " . $dados['numero_carteira'] . "\n";
+            $mensagemRedirecionada .= "Médico Preferência: " . $dados['medico_preferencia'] . "\n";
+            $mensagemRedirecionada .= "Data/Hora Interesse: " . $dados['dia_hora_interesse'] . "\n";
+            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            
+            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            
+            Model::resetChatState($chatId);
+            return "Obrigado! Suas informações foram registradas com sucesso. Em breve entraremos em contato.";
+
+        // Fluxo consulta retorno
+        case 'retorno_nome':
+            $dados['nome_completo'] = $message;
+            Model::updateChatState($chatId, 'retorno_convenio', $dados);
+            return "Por favor, informe seu convênio:";
+
+        case 'retorno_convenio':
+            $dados['convenio'] = $message;
+            Model::updateChatState($chatId, 'retorno_carteira', $dados);
+            return "Por favor, informe o número da sua carteira do convênio:";
+
+        case 'retorno_carteira':
+            $dados['numero_carteira'] = $message;
+            Model::updateChatState($chatId, 'retorno_medico', $dados);
+            return "Por favor, informe o médico de sua preferência (se houver):";
+
+        case 'retorno_medico':
+            $dados['medico_preferencia'] = $message;
+            Model::updateChatState($chatId, 'retorno_data', $dados);
+            return "Por favor, informe o dia e hora de sua preferência:";
+
+        case 'retorno_data':
+            $dados['dia_hora_interesse'] = $message;
+            $dados['tipo_atendimento'] = 'consulta_retorno';
+            $dados['numero_contato'] = extrairNumeroCelular($chatId);
+            
+            salvarAgendamento($dados);
+
+            // Enviar mensagem para outro número
+            $mensagemRedirecionada = "Consulta Retorno:\n";
+            $mensagemRedirecionada .= "Nome: " . $dados['nome_completo'] . "\n";
+            $mensagemRedirecionada .= "Convênio: " . $dados['convenio'] . "\n";
+            $mensagemRedirecionada .= "Nº Carteira: " . $dados['numero_carteira'] . "\n";
+            $mensagemRedirecionada .= "Médico Preferência: " . $dados['medico_preferencia'] . "\n";
+            $mensagemRedirecionada .= "Data/Hora Interesse: " . $dados['dia_hora_interesse'] . "\n";
+            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            
+            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            
+            Model::resetChatState($chatId);
+            return "Obrigado! Suas informações foram registradas com sucesso. Em breve entraremos em contato.";
+
+        // Fluxo falta
+        case 'falta_nome':
+            $dados['nome_completo'] = $message;
+            Model::updateChatState($chatId, 'falta_motivo', $dados);
+            return "Por favor, informe o motivo da ausência:";
+
+        case 'falta_motivo':
+            $dados['motivo_ausencia'] = $message;
+            Model::updateChatState($chatId, 'falta_hospital', $dados);
+            return "Em caso de Internação, favor informar o hospital onde está internado:";
+
+        case 'falta_hospital':
+            $dados['hospital_internacao'] = $message;
+            $dados['tipo_atendimento'] = 'falta';
+            $dados['numero_contato'] = extrairNumeroCelular($chatId);
+            
+            salvarAgendamento($dados);
+
+            // Enviar mensagem para outro número
+            $mensagemRedirecionada = "Registro de Falta:\n";
+            $mensagemRedirecionada .= "Nome: " . $dados['nome_completo'] . "\n";
+            $mensagemRedirecionada .= "Motivo Ausência: " . $dados['motivo_ausencia'] . "\n";
+            $mensagemRedirecionada .= "Hospital Internação: " . $dados['hospital_internacao'] . "\n";
+            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            
+            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            
+            Model::resetChatState($chatId);
+            return "Obrigado! Sua falta foi registrada com sucesso. Em breve entraremos em contato.";
+
+        // Fluxo feedback
+        case 'feedback':
+            $dados['descricao_feedback'] = $message;
+            $dados['tipo_atendimento'] = 'feedback';
+            $dados['numero_contato'] = extrairNumeroCelular($chatId);
+            $dados['nome_completo'] = explode('@', $chatId)[0];
+            
+            salvarAgendamento($dados);
+            Model::resetChatState($chatId);
+            return "Obrigado pelo seu feedback! Ele foi registrado com sucesso.\n\nA Nefroclinicas xxx agradece o contato.";
+    }
+    
+    return "Desculpe, não entendi sua mensagem. Digite 'oi' para começar.";
+}
+
+// Função para verificar se é uma saudação
+function isGreeting($message) {
+    $greetings = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"];
+    return in_array(strtolower($message), $greetings);
+}
+
+// Função para extrair apenas o número do celular do chatId
+function extrairNumeroCelular($chatId) {
+    // Remove tudo após o @ (incluindo o @)
+    $numero = explode('@', $chatId)[0];
+    return $numero;
 }
 
 try {
@@ -255,10 +503,19 @@ try {
     }
 
     // Normaliza o formato da mensagem
-    $array = normalizeMessageFormat($array);
+    $normalizedArray = normalizeMessageFormat($array);
+    
+    // Se for uma mensagem de acknowledge, ignora o processamento
+    if ($normalizedArray === null) {
+        http_response_code(200);
+        exit;
+    }
     
     // Log da mensagem normalizada
-    logError("Normalized message", json_encode($array, JSON_PRETTY_PRINT));
+    logError("Normalized message", json_encode($normalizedArray, JSON_PRETTY_PRINT));
+
+    // Atualiza $array com a versão normalizada
+    $array = $normalizedArray;
 
     // Extrair dados com validação
     $fromMe = isset($array["key"]["fromMe"]) ? $array["key"]["fromMe"] : false;
@@ -267,221 +524,20 @@ try {
     $chatId = extractChatId($array);
 
     // Log dos dados processados
-    logError("Processed message data", "chatId: $chatId, type: $type, message: $message");
+    logError("Processed message data", "chatId: $chatId, type: $type, message: " . ($message ?? 'null'));
 
     // Só processa mensagens de usuário (não do bot) e apenas tipos suportados
     if (!$fromMe && $chatId && $message && $type != "message.ack") {
-        // Recupera o estado da conversa para este chat
-        $state = getConversationState($chatId);
+        // Buscar estado atual do chat
+        $currentState = Model::getChatState($chatId);
         
-        // Log do estado atual para debug
-        logError("Current state before processing", print_r($state, true));
+        // Processar a mensagem e obter resposta
+        $response = processStep($chatId, $message, $currentState);
         
-        // --- FLUXO PRINCIPAL DO BOT ---
-        if (in_array(strtolower($message), ["oi", "olá", "ola", "Oi", "Olá", "Ola", "Bom dia", "Boa tarde", "Boa noite", "bom dia", "boa tarde", "boa noite"])) {
-            $state = [
-                'menu' => 'main',
-                'fluxo' => null,
-                'subfluxo' => null,
-                'dados' => [],
-                'campo' => 0,
-                'perguntas' => []
-            ];
-            updateConversationState($chatId, $state);
-            Megaapi::text($chatId, "Seja bem-vindo à Nefroclinicas unidade xxx. Digite a opção desejada abaixo:\n\n1 - Marcação de Consultas\n2 - Solicitação de Vaga para Diálise\n3 - Notificar uma Falta ou Ausência de Sessão de Diálise\n4 - Caso queira deixar um elogio, sugestão ou reclamação");
-            exit;
+        // Enviar resposta
+        if (!empty($response)) {
+            Megaapi::text($chatId, $response);
         }
-
-        // --- MENU PRINCIPAL ---
-        if ($state['menu'] === 'main' && $state['fluxo'] === null) {
-            switch($message) {
-                case "1":
-                    $state['menu'] = 'consulta';
-                    $state['fluxo'] = 'escolha_tipo';
-                    updateConversationState($chatId, $state);
-                    Megaapi::text($chatId, "Digite:\n1 - Para primeira consulta\n2 - Caso não seja sua primeira consulta conosco");
-                    exit;
-                case "2":
-                    Megaapi::text($chatId, "Para mais informações de vagas em nossa unidade, segue o contato da nossa chefe de Captação: Cynthia - 21 98987-6009");
-                    Megaapi::text($chatId, "A Nefroclinicas xxx agradece o contato.");
-                    $state['menu'] = 'main';
-                    $state['fluxo'] = null;
-                    updateConversationState($chatId, $state);
-                    exit;
-                case "3":
-                    $state['fluxo'] = 'falta';
-                    $state['dados'] = [];
-                    $state['campo'] = 0;
-                    $perguntas = [
-                        'Nome completo do Paciente:',
-                        'Motivo da ausência:',
-                        'Em caso de Internação, favor informar o hospital onde está internado:'
-                    ];
-                    $state['perguntas'] = $perguntas;
-                    updateConversationState($chatId, $state);
-                    Megaapi::text($chatId, $perguntas[0]);
-                    exit;
-                case "4":
-                    $state['fluxo'] = 'feedback';
-                    updateConversationState($chatId, $state);
-                    Megaapi::text($chatId, "Por favor, descreva para nós o seu elogio, sugestão ou reclamação:");
-                    exit;
-                default:
-                    Megaapi::text($chatId, "Desculpe, não entendi sua mensagem. Por favor, digite uma das opções válidas do menu.");
-                    exit;
-            }
-        }
-
-        // --- MENU DE CONSULTAS ---
-        if ($state['menu'] === 'consulta' && $state['fluxo'] === 'escolha_tipo') {
-            switch($message) {
-                case "1":
-                    $state['fluxo'] = 'primeira_consulta';
-                    $state['subfluxo'] = 'coleta_dados';
-                    $state['dados'] = [];
-                    $state['campo'] = 0;
-                    $perguntas = [
-                        'Nome Completo:',
-                        'Identidade:',
-                        'CPF:',
-                        'Endereço:',
-                        'Convênio:',
-                        'Número da Carteira do Convênio:',
-                        'Médico de preferência (se houver):',
-                        'Dia e hora de interesse:'
-                    ];
-                    $state['perguntas'] = $perguntas;
-                    updateConversationState($chatId, $state);
-                    Megaapi::text($chatId, $perguntas[0]);
-                    exit;
-                case "2":
-                    $state['fluxo'] = 'consulta_retorno';
-                    $state['subfluxo'] = 'coleta_dados';
-                    $state['dados'] = [];
-                    $state['campo'] = 0;
-                    $perguntas = [
-                        'Nome Completo:',
-                        'Convênio:',
-                        'Número da Carteira do Convênio:',
-                        'Médico de preferência (se houver):',
-                        'Dia e hora de interesse:'
-                    ];
-                    $state['perguntas'] = $perguntas;
-                    updateConversationState($chatId, $state);
-                    Megaapi::text($chatId, $perguntas[0]);
-                    exit;
-                default:
-                    Megaapi::text($chatId, "Opção inválida. Digite 1 para primeira consulta ou 2 para retorno.");
-                    exit;
-            }
-        }
-
-        // --- PROCESSAMENTO DOS FLUXOS ---
-        if (in_array($state['fluxo'], ['primeira_consulta', 'consulta_retorno']) && $state['subfluxo'] === 'coleta_dados') {
-            $perguntas = $state['perguntas'];
-            $campo = $state['campo'];
-            $state['dados'][] = $message;
-            $campo++;
-            
-            if ($campo < count($perguntas)) {
-                $state['campo'] = $campo;
-                updateConversationState($chatId, $state);
-                Megaapi::text($chatId, $perguntas[$campo]);
-                exit;
-            } else {
-                $campos = $state['fluxo'] === 'primeira_consulta'
-                    ? ['nome_completo','identidade','cpf','endereco','convenio','numero_carteira','medico_preferencia','dia_hora_interesse']
-                    : ['nome_completo','convenio','numero_carteira','medico_preferencia','dia_hora_interesse'];
-                
-                $dadosAssoc = array_combine($campos, $state['dados']);
-                $dadosAssoc['tipo_atendimento'] = $state['fluxo'];
-                $numeroContato = isset($array['key']['remoteJid']) ? explode('@', $array['key']['remoteJid'])[0] : null;
-                $dadosAssoc['numero_contato'] = $numeroContato;
-                
-                salvarAgendamento($dadosAssoc);
-                Megaapi::text($chatId, "Obrigado! Suas informações foram registradas com sucesso. Em breve entraremos em contato.");
-                
-                // Reset do estado
-                $state = [
-                    'menu' => 'main',
-                    'fluxo' => null,
-                    'subfluxo' => null,
-                    'dados' => [],
-                    'campo' => 0,
-                    'perguntas' => []
-                ];
-                updateConversationState($chatId, $state);
-                exit;
-            }
-        }
-
-        if ($state['fluxo'] === 'falta') {
-            $perguntas = $state['perguntas'];
-            $campo = $state['campo'];
-            $state['dados'][] = $message;
-            $campo++;
-            if ($campo < count($perguntas)) {
-                $state['campo'] = $campo;
-                updateConversationState($chatId, $state);
-                Megaapi::text($chatId, $perguntas[$campo]);
-                exit;
-            } else {
-                $campos = ['nome_completo','motivo_ausencia','hospital_internacao'];
-                $dadosAssoc = array_combine($campos, $state['dados']);
-                $dadosAssoc['tipo_atendimento'] = 'falta';
-                // Salva o número de contato
-                $numeroContato = isset($array['key']['remoteJid']) ? explode('@', $array['key']['remoteJid'])[0] : null;
-                $dadosAssoc['numero_contato'] = $numeroContato;
-                salvarAgendamento($dadosAssoc);
-                Megaapi::text($chatId, "Obrigado! Sua falta foi registrada com sucesso. Em breve entraremos em contato.");
-                $state = [
-                    'menu' => 'main',
-                    'fluxo' => null,
-                    'subfluxo' => null,
-                    'dados' => [],
-                    'campo' => 0,
-                    'perguntas' => []
-                ];
-                updateConversationState($chatId, $state);
-                exit;
-            }
-        }
-
-        if ($state['fluxo'] === 'feedback') {
-            // Pega o nome do WhatsApp (pushName) ou o número do contato
-            $nomeContato = null;
-            if (isset($array['pushName']) && !empty($array['pushName'])) {
-                $nomeContato = $array['pushName'];
-            } else if (isset($array['key']['remoteJid'])) {
-                $jid = $array['key']['remoteJid'];
-                $nomeContato = explode('@', $jid)[0];
-            }
-            $numeroContato = isset($array['key']['remoteJid']) ? explode('@', $array['key']['remoteJid'])[0] : null;
-            $dadosAssoc = [
-                'nome_completo' => $nomeContato,
-                // 'nome_contato' => $numeroContato, // salva também em nome_contato
-                'descricao_feedback' => $message,
-                'tipo_atendimento' => 'feedback',
-                'numero_contato' => $numeroContato
-            ];
-            salvarAgendamento($dadosAssoc);
-            Megaapi::text($chatId, "Obrigado pelo seu feedback! Ele foi registrado com sucesso.");
-            Megaapi::text($chatId, "A Nefroclinicas xxx agradece o contato.");
-            $state = [
-                'menu' => 'main',
-                'fluxo' => null,
-                'subfluxo' => null,
-                'dados' => [],
-                'campo' => 0,
-                'perguntas' => []
-            ];
-            updateConversationState($chatId, $state);
-            exit;
-        }
-
-        // --- MENSAGEM DE ERRO PADRÃO ---
-        Megaapi::text($chatId, "Desculpe, não entendi sua mensagem. Por favor, digite uma das opções válidas do menu.");
-        exit;
     } else {
         // Tratamento de status das mensagens enviadas
         if ($type == 'message.ack') {
