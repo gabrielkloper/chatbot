@@ -1,5 +1,6 @@
 <?php
 
+
 require __DIR__ . '/vendor/autoload.php';
 
 use core\Megaapi;
@@ -136,10 +137,10 @@ function processarDados($chatId, $message, $tipo) {
         switch ($tipo) {
             case 'primeira_consulta':
             case 'consulta_retorno':
-                $numeroDestino = '5521991159846'; // Número da recepção
+                $numeroDestino = '5521998362972'; // Número da recepção
                 break;
             case 'falta':
-                $numeroDestino = '5521991159846'; // Número da enfermagem
+                $numeroDestino = '5521998362972'; // Número da enfermagem
                 break;
         }
         
@@ -376,9 +377,9 @@ function processStep($chatId, $message, $currentState) {
             $mensagemRedirecionada .= "Nº Carteira: " . $dados['numero_carteira'] . "\n";
             $mensagemRedirecionada .= "Médico Preferência: " . $dados['medico_preferencia'] . "\n";
             $mensagemRedirecionada .= "Data/Hora Interesse: " . $dados['dia_hora_interesse'] . "\n";
-            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            $mensagemRedirecionada .= "Contato: +" . $dados['numero_contato'];
             
-            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            enviarParaOutroNumero('5521998362972', $mensagemRedirecionada);
             
             Model::resetChatState($chatId);
             return "Obrigado! Suas informações foram registradas com sucesso. Em breve entraremos em contato.";
@@ -418,9 +419,9 @@ function processStep($chatId, $message, $currentState) {
             $mensagemRedirecionada .= "Nº Carteira: " . $dados['numero_carteira'] . "\n";
             $mensagemRedirecionada .= "Médico Preferência: " . $dados['medico_preferencia'] . "\n";
             $mensagemRedirecionada .= "Data/Hora Interesse: " . $dados['dia_hora_interesse'] . "\n";
-            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            $mensagemRedirecionada .= "Contato: +" . $dados['numero_contato'];
             
-            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            enviarParaOutroNumero('5521998362972', $mensagemRedirecionada);
             
             Model::resetChatState($chatId);
             return "Obrigado! Suas informações foram registradas com sucesso. Em breve entraremos em contato.";
@@ -448,9 +449,9 @@ function processStep($chatId, $message, $currentState) {
             $mensagemRedirecionada .= "Nome: " . $dados['nome_completo'] . "\n";
             $mensagemRedirecionada .= "Motivo Ausência: " . $dados['motivo_ausencia'] . "\n";
             $mensagemRedirecionada .= "Hospital Internação: " . $dados['hospital_internacao'] . "\n";
-            $mensagemRedirecionada .= "Contato: " . $dados['numero_contato'];
+            $mensagemRedirecionada .= "Contato: +" . $dados['numero_contato'];
             
-            enviarParaOutroNumero('5521991159846', $mensagemRedirecionada);
+            enviarParaOutroNumero('5521998362972', $mensagemRedirecionada);
             
             Model::resetChatState($chatId);
             return "Obrigado! Sua falta foi registrada com sucesso. Em breve entraremos em contato.";
