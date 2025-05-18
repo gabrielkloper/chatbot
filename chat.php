@@ -6,7 +6,6 @@ require __DIR__ . '/vendor/autoload.php';
 use core\Megaapi;
 use core\Model;
 
-// Megaapi::configWebhook("https://a086-2804-3d28-43-e0e7-b018-c156-364e-8370.ngrok-free.app/chatbotMegaapi/index.php", true);
 
 // Enable error reporting for debugging
 ini_set('display_errors', 1);
