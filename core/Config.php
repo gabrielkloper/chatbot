@@ -12,7 +12,7 @@ class Config {
 
     //Dados da instancia
     const HOST = "apistart03.megaapi.com.br";
-    const INSTANCE = "megastart-Mn5rL2PTOiy";
-    const TOKEN = "Mn5rL2PTOiy";
+    const INSTANCE = "megastart-MyOzD1xlxjm";
+    const TOKEN = "MyOzD1xlxjm";
 
 }
